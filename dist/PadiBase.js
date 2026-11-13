@@ -4,6 +4,9 @@ import { buildUrl } from './utils/url.js';
 import { RecordService } from './services/RecordService.js';
 import { FileService } from './services/FileService.js';
 import { RealtimeService } from './services/RealtimeService.js';
+import { AuthService } from './services/AuthService.js';
+import { AdminService } from './services/AdminService.js';
+import { CollectionService } from './services/CollectionService.js';
 /**
  * PadiBase Client - High-performance BaaS SDK
  *
@@ -16,6 +19,9 @@ import { RealtimeService } from './services/RealtimeService.js';
  * // Table CRUD
  * const posts = await padi.table('posts').getList(1, 20);
  *
+ * // Direct Auth shortcut
+ * await padi.auth.login('user@example.com', 'password123');
+ *
  * // Realtime auto-subscriptions
  * padi.table('posts').subscribe('*', (e) => {
  *   console.log(e.action, e.record);
@@ -24,21 +30,37 @@ import { RealtimeService } from './services/RealtimeService.js';
  * // Direct HTTP Methods
  * const data = await padi.get('/api/health');
  * const res = await padi.post('/api/posts', { title: 'Hello' });
+ *
+ * // Atomic Database Batch / Transactions
+ * await padi.transaction([
+ *   { action: 'create', collection: 'posts', data: { title: 'First' } },
+ *   { action: 'create', collection: 'posts', data: { title: 'Second' } }
+ * ]);
  * ```
  */
 export class PadiBase {
     baseUrl;
     authStore;
     customFetch;
+    storage;
     files;
     realtime;
+    auth;
+    admins;
+    collections;
+    tables;
     recordServices = new Map();
     constructor(baseUrl = 'http://127.0.0.1:8085', config = {}) {
         this.baseUrl = baseUrl.replace(/\/+$/, '');
         this.authStore = config.authStore || new LocalAuthStore();
         this.customFetch = config.customFetch;
-        this.files = new FileService(this);
+        this.storage = new FileService(this);
+        this.files = this.storage;
         this.realtime = new RealtimeService(this);
+        this.auth = new AuthService(this);
+        this.admins = new AdminService(this);
+        this.collections = new CollectionService(this);
+        this.tables = this.collections;
         if (config.autoRealtime !== undefined) {
             this.realtime.autoConnect = config.autoRealtime;
         }
@@ -72,6 +94,65 @@ export class PadiBase {
      */
     async health() {
         return this.get('/api/health');
+    }
+    /**
+     * Executes multiple operations atomically inside a single DB transaction.
+     * If any step fails, the entire batch rolls back.
+     *
+     * @example
+     * ```ts
+     * const res = await padi.transaction([
+     *   { action: 'create', collection: 'posts', data: { title: 'First' } },
+     *   { action: 'update', collection: 'users', id: 'u_1', data: { score: 100 } }
+     * ]);
+     * ```
+     */
+    async transaction(operations, options = {}) {
+        return this.send('/api/transactions', {
+            method: 'POST',
+            body: { operations },
+            ...options,
+        });
+    }
+    /**
+     * Alias for transaction()
+     */
+    async batch(operations, options = {}) {
+        return this.transaction(operations, options);
+    }
+    /**
+     * Executes a parameterized custom SQL query (Admin Superuser only).
+     *
+     * @example
+     * ```ts
+     * const res = await padi.sql('SELECT * FROM users WHERE status = ?', ['active']);
+     * console.log(res.items);
+     * ```
+     */
+    async sql(query, params = [], options = {}) {
+        return this.send('/api/sql', {
+            method: 'POST',
+            body: { sql: query, params },
+            ...options,
+        });
+    }
+    /**
+     * Calls a dynamic custom SQL endpoint configured in PadiBase dashboard (`/api/custom/{*path}`).
+     *
+     * @example
+     * ```ts
+     * const stats = await padi.custom('stats/dashboard', { method: 'GET' });
+     * ```
+     */
+    async custom(endpointPath, options = {}) {
+        const cleanPath = (endpointPath || '').replace(/^\/+/, '');
+        return this.send(`/api/custom/${cleanPath}`, options);
+    }
+    /**
+     * Alias for custom()
+     */
+    async endpoint(endpointPath, options = {}) {
+        return this.custom(endpointPath, options);
     }
     // ==========================================
     // Direct HTTP Methods

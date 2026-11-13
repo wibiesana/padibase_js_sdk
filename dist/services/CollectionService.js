@@ -1,0 +1,87 @@
+import { BaseService } from './BaseService.js';
+export class CollectionService extends BaseService {
+    /**
+     * List all collections/tables in the database.
+     */
+    async getList(options = {}) {
+        return this.client.send('/api/collections', {
+            method: 'GET',
+            ...options,
+        });
+    }
+    /**
+     * Alias for getList
+     */
+    async getAll(options = {}) {
+        return this.getList(options);
+    }
+    /**
+     * Get a single collection schema definition by name or ID.
+     */
+    async getOne(nameOrId, options = {}) {
+        return this.client.send(`/api/collections/${encodeURIComponent(nameOrId)}`, {
+            method: 'GET',
+            ...options,
+        });
+    }
+    /**
+     * Create a new collection/table.
+     */
+    async create(data, options = {}) {
+        return this.client.send('/api/collections', {
+            method: 'POST',
+            body: data,
+            ...options,
+        });
+    }
+    /**
+     * Update an existing collection schema/rules.
+     */
+    async update(nameOrId, data, options = {}) {
+        return this.client.send(`/api/collections/${encodeURIComponent(nameOrId)}`, {
+            method: 'PATCH',
+            body: data,
+            ...options,
+        });
+    }
+    /**
+     * Rename a collection/table.
+     */
+    async rename(nameOrId, newName, options = {}) {
+        return this.client.send(`/api/collections/${encodeURIComponent(nameOrId)}/rename`, {
+            method: 'POST',
+            body: { name: newName },
+            ...options,
+        });
+    }
+    /**
+     * Delete a collection and drop its underlying database table.
+     */
+    async delete(nameOrId, options = {}) {
+        await this.client.send(`/api/collections/${encodeURIComponent(nameOrId)}`, {
+            method: 'DELETE',
+            ...options,
+        });
+        return true;
+    }
+    /**
+     * Synchronize physical database tables with PadiBase system catalog.
+     */
+    async sync(options = {}) {
+        return this.client.send('/api/collections/sync', {
+            method: 'POST',
+            ...options,
+        });
+    }
+    /**
+     * Import collections schema definition array.
+     */
+    async import(collections, options = {}) {
+        return this.client.send('/api/collections/import', {
+            method: 'PUT',
+            body: { collections },
+            ...options,
+        });
+    }
+}
+//# sourceMappingURL=CollectionService.js.map

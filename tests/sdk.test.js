@@ -174,12 +174,43 @@ describe('PadiBase SDK Core Tests', () => {
     assert.equal(client.authStore.record.email, 'al@example.com');
   });
 
-  test('FileService URL generation', () => {
+  test('FileService / StorageService URL generation and upload', async () => {
+    // Storage bucket URL
+    const storageUrl = padi.storage.getUrl('avatars', 'avatar.png', { download: 1 });
+    assert.equal(storageUrl, 'http://127.0.0.1:8085/api/storage/avatars/avatar.png?download=1');
+
+    // Legacy 3-arg URL compatibility
     const url = padi.files.getUrl('users', 'rec_1', 'avatar.png', { thumb: '100x100' });
     assert.equal(url, 'http://127.0.0.1:8085/api/files/users/rec_1/avatar.png?thumb=100x100');
 
     const urlFromObj = padi.files.getUrl({ table: 'posts', id: 'p_2' }, 'cover.jpg');
     assert.equal(urlFromObj, 'http://127.0.0.1:8085/api/files/posts/p_2/cover.jpg');
+
+    // Test storage.upload(bucket, file)
+    let capturedUrl = '';
+    const client = new PadiBase('http://127.0.0.1:8085', {
+      customFetch: async (reqUrl) => {
+        capturedUrl = reqUrl;
+        return new Response(
+          JSON.stringify({
+            uploaded: true,
+            bucket: 'avatars',
+            filename: '123_pic.png',
+            key: 'avatars/123_pic.png',
+            path: '/api/storage/avatars/123_pic.png',
+            url: '/api/storage/avatars/123_pic.png',
+            size: 1024,
+            mime: 'image/png',
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } }
+        );
+      },
+    });
+
+    const uploadRes = await client.storage.upload('avatars', new Blob(['hello'], { type: 'image/png' }));
+    assert.equal(capturedUrl, 'http://127.0.0.1:8085/api/storage/avatars');
+    assert.equal(uploadRes.url, 'http://127.0.0.1:8085/api/storage/avatars/123_pic.png');
+    assert.equal(uploadRes.path, '/api/storage/avatars/123_pic.png');
   });
 
   test('Realtime topic subscription and matching', () => {
@@ -238,5 +269,228 @@ describe('PadiBase SDK Core Tests', () => {
     unsubPosts();
     unsubPost42();
     unsubGlobal();
+  });
+
+  test('Advanced RecordService: first, count, batch-create, batch-delete, export, import', async () => {
+    const calls = [];
+    const mockFetch = async (url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+
+      if (url.includes('/first')) {
+        return new Response(JSON.stringify({ id: 'rec_first', title: 'First Post' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/count')) {
+        return new Response(JSON.stringify({ collection: 'posts', count: 42, total: 42 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/batch-create')) {
+        return new Response(JSON.stringify([{ id: 'b_1' }, { id: 'b_2' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/batch-delete')) {
+        return new Response(JSON.stringify({ deleted: 2, ids: ['b_1', 'b_2'] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/export')) {
+        return new Response(JSON.stringify([{ id: 'exp_1' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/import')) {
+        return new Response(JSON.stringify({ imported: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    };
+
+    const client = new PadiBase('http://127.0.0.1:8085', { customFetch: mockFetch });
+    const posts = client.table('posts');
+
+    // Test getFirst
+    const firstRec = await posts.getFirst({ sort: '-created' });
+    assert.equal(firstRec.id, 'rec_first');
+    assert.ok(calls[0].url.includes('/api/posts/first?sort=-created'));
+
+    // Test getFirstListItem
+    const firstFiltered = await posts.getFirstListItem('status = "active"');
+    assert.equal(firstFiltered.id, 'rec_first');
+
+    // Test getCount
+    const count = await posts.getCount({ filter: 'status = "active"' });
+    assert.equal(count, 42);
+
+    // Test createBatch
+    const createdBatch = await posts.createBatch([{ title: 'One' }, { title: 'Two' }]);
+    assert.equal(createdBatch.length, 2);
+    assert.ok(calls[3].url.includes('/api/posts/batch-create'));
+
+    // Test deleteBatch
+    const delRes = await posts.deleteBatch(['b_1', 'b_2']);
+    assert.equal(delRes.deleted, 2);
+    assert.ok(calls[4].url.includes('/api/posts/batch-delete'));
+
+    // Test export
+    const exp = await posts.export();
+    assert.equal(exp.length, 1);
+
+    // Test import
+    const imp = await posts.import([{ title: 'Imported' }]);
+    assert.equal(imp.imported, 1);
+  });
+
+  test('AuthService shortcuts and methods (/api/auth/*)', async () => {
+    const calls = [];
+    const mockFetch = async (url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+
+      if (url.endsWith('/api/auth/login')) {
+        return new Response(
+          JSON.stringify({ token: 'jwt_auth_shortcut', record: { id: 'u_auth', email: 'sh@test.com' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/api/auth/me')) {
+        return new Response(
+          JSON.stringify({ record: { id: 'u_auth', email: 'sh@test.com', name: 'Updated' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new PadiBase('http://127.0.0.1:8085', { customFetch: mockFetch });
+
+    // Login via padi.auth
+    const authRes = await client.auth.login('sh@test.com', 'secret123');
+    assert.equal(authRes.token, 'jwt_auth_shortcut');
+    assert.equal(client.authStore.token, 'jwt_auth_shortcut');
+
+    // Get Profile & Update Profile
+    const profile = await client.auth.getProfile();
+    assert.equal(profile.email, 'sh@test.com');
+
+    const updated = await client.auth.updateProfile({ name: 'Updated' });
+    assert.equal(updated.name, 'Updated');
+
+    // Password reset and change
+    await client.auth.requestPasswordReset('sh@test.com');
+    await client.auth.confirmPasswordReset('token_123', 'newpass123');
+    await client.auth.changePassword('old123', 'newpass123');
+
+    // Verification
+    await client.auth.requestVerification('sh@test.com');
+    await client.auth.confirmVerification('verify_token_123');
+
+    // Logout
+    await client.auth.logout();
+    assert.equal(client.authStore.isValid, false);
+  });
+
+  test('AdminService & CollectionService management', async () => {
+    const calls = [];
+    const mockFetch = async (url, init) => {
+      calls.push({ url, method: init?.method });
+
+      if (url.endsWith('/api/admins/has-admins')) {
+        return new Response(JSON.stringify({ hasAdmins: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/admins/auth-with-password')) {
+        return new Response(
+          JSON.stringify({ token: 'admin_jwt_123', admin: { id: 'adm_1', email: 'admin@padi.io' } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/api/collections')) {
+        return new Response(
+          JSON.stringify([{ id: 'c_1', name: 'posts' }, { id: 'c_2', name: 'users' }]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new PadiBase('http://127.0.0.1:8085', { customFetch: mockFetch });
+
+    // Admin checks and login
+    const hasAdmins = await client.admins.hasAdmins();
+    assert.equal(hasAdmins, true);
+
+    const adminAuth = await client.admins.authWithPassword('admin@padi.io', 'pass');
+    assert.equal(adminAuth.token, 'admin_jwt_123');
+    assert.equal(client.authStore.token, 'admin_jwt_123');
+
+    // Collections
+    const list = await client.collections.getList();
+    assert.equal(list.length, 2);
+    assert.equal(list[0].name, 'posts');
+  });
+
+  test('PadiBase batch/transactions, custom SQL, and dynamic custom endpoints', async () => {
+    const calls = [];
+    const mockFetch = async (url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+
+      if (url.endsWith('/api/transactions')) {
+        return new Response(
+          JSON.stringify({ committed: true, total_operations: 2, results: [{ id: '1' }, { id: '2' }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/api/sql')) {
+        return new Response(
+          JSON.stringify({ items: [{ total: 100 }], totalItems: 1 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/custom/reports/monthly')) {
+        return new Response(
+          JSON.stringify({ revenue: 50000 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new PadiBase('http://127.0.0.1:8085', { customFetch: mockFetch });
+
+    // Transaction
+    const tx = await client.transaction([
+      { action: 'create', collection: 'posts', data: { title: 'First' } },
+      { action: 'create', collection: 'posts', data: { title: 'Second' } },
+    ]);
+    assert.equal(tx.committed, true);
+    assert.equal(tx.total_operations, 2);
+
+    // Custom SQL
+    const sqlRes = await client.sql('SELECT COUNT(*) as total FROM posts');
+    assert.equal(sqlRes.items[0].total, 100);
+
+    // Custom Dynamic Endpoint
+    const customRes = await client.custom('reports/monthly');
+    assert.equal(customRes.revenue, 50000);
   });
 });

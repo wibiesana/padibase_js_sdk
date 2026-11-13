@@ -37,6 +37,42 @@ export class RecordService extends BaseService {
         return this.getFullList(options);
     }
     /**
+     * Returns the first record matching the query criteria.
+     */
+    async getFirst(options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/first`, {
+            method: 'GET',
+            query: options,
+            ...options,
+        });
+    }
+    /**
+     * Helper that retrieves the first record matching a filter string (PocketBase style).
+     *
+     * @example
+     * ```ts
+     * const user = await padi.table('users').getFirstListItem('email = "alex@test.com"');
+     * ```
+     */
+    async getFirstListItem(filter, options = {}) {
+        return this.getFirst({ ...options, filter });
+    }
+    /**
+     * Returns the total count of records matching the optional filter.
+     *
+     * @example
+     * ```ts
+     * const count = await padi.table('orders').getCount({ filter: 'status = "completed"' });
+     * ```
+     */
+    async getCount(options = {}) {
+        const res = await this.client.send(`/api/${encodeURIComponent(this.tableName)}/count`, {
+            method: 'GET',
+            query: options,
+        });
+        return (res && typeof res.count === 'number') ? res.count : (res?.total || 0);
+    }
+    /**
      * Returns a single record by its ID.
      */
     async getOne(id, options = {}) {
@@ -53,6 +89,25 @@ export class RecordService extends BaseService {
         return this.client.send(`/api/${encodeURIComponent(this.tableName)}`, {
             method: 'POST',
             body,
+            query: options,
+            ...options,
+        });
+    }
+    /**
+     * Creates multiple records in a single batch operation.
+     *
+     * @example
+     * ```ts
+     * const created = await padi.table('tags').createBatch([
+     *   { name: 'Rust' },
+     *   { name: 'TypeScript' }
+     * ]);
+     * ```
+     */
+    async createBatch(items, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/batch-create`, {
+            method: 'POST',
+            body: { items },
             query: options,
             ...options,
         });
@@ -77,6 +132,41 @@ export class RecordService extends BaseService {
             ...options,
         });
         return true;
+    }
+    /**
+     * Deletes multiple records by their IDs in a single batch.
+     *
+     * @example
+     * ```ts
+     * const res = await padi.table('logs').deleteBatch(['id_1', 'id_2']);
+     * console.log(`Deleted ${res.deleted} records`);
+     * ```
+     */
+    async deleteBatch(ids, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/batch-delete`, {
+            method: 'POST',
+            body: { ids },
+            ...options,
+        });
+    }
+    /**
+     * Exports records from this collection as JSON.
+     */
+    async export(options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/export`, {
+            method: 'GET',
+            query: options,
+        });
+    }
+    /**
+     * Imports an array of records into this collection.
+     */
+    async import(items, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/import`, {
+            method: 'POST',
+            body: { items },
+            ...options,
+        });
     }
     // ==========================================
     // Auth Table Methods
@@ -124,6 +214,93 @@ export class RecordService extends BaseService {
             ...options,
         });
         return res.record || res;
+    }
+    /**
+     * Updates the current logged in user profile.
+     */
+    async updateProfile(data, options = {}) {
+        const res = await this.client.send(`/api/${encodeURIComponent(this.tableName)}/me`, {
+            method: 'PATCH',
+            body: data,
+            ...options,
+        });
+        const updated = res.record || res;
+        if (this.client.authStore.isValid && updated) {
+            this.client.authStore.save(this.client.authStore.token, updated);
+        }
+        return updated;
+    }
+    /**
+     * Refreshes the authentication token and user record.
+     */
+    async authRefresh(options = {}) {
+        const res = await this.client.send(`/api/${encodeURIComponent(this.tableName)}/auth-refresh`, {
+            method: 'POST',
+            ...options,
+        });
+        if (res && res.token) {
+            this.client.authStore.save(res.token, res.record);
+        }
+        return res;
+    }
+    /**
+     * Sends a password reset request email for an account in this collection.
+     */
+    async requestPasswordReset(email, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/request-password-reset`, {
+            method: 'POST',
+            body: { email, identity: email },
+            ...options,
+        });
+    }
+    /**
+     * Confirms password reset using token and sets a new password.
+     */
+    async confirmPasswordReset(token, password, passwordConfirm, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/confirm-password-reset`, {
+            method: 'POST',
+            body: {
+                token,
+                password,
+                newPassword: password,
+                passwordConfirm: passwordConfirm || password,
+            },
+            ...options,
+        });
+    }
+    /**
+     * Requests an email verification message for an account in this collection.
+     */
+    async requestVerification(email, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/request-verification`, {
+            method: 'POST',
+            body: { email, identity: email },
+            ...options,
+        });
+    }
+    /**
+     * Confirms user email verification using token.
+     */
+    async confirmVerification(token, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/confirm-verification`, {
+            method: 'POST',
+            body: { token },
+            ...options,
+        });
+    }
+    /**
+     * Changes the password for the current authenticated user in this collection.
+     */
+    async changePassword(oldPassword, newPassword, passwordConfirm, options = {}) {
+        return this.client.send(`/api/${encodeURIComponent(this.tableName)}/change-password`, {
+            method: 'POST',
+            body: {
+                oldPassword,
+                newPassword,
+                passwordConfirm: passwordConfirm || newPassword,
+            },
+            ...options,
+        });
     }
     /**
      * Logs out the user and clears client authStore.

@@ -119,8 +119,8 @@ const customResult = await padi.send('/api/custom/reports', {
   body: { year: 2026 }
 });
 
-// 7. Safe File URL Builder
-const avatarUrl = padi.buildUrl('/api/files/users/u1/avatar.png');
+// 7. Safe Storage URL Builder
+const avatarUrl = padi.storage.getUrl('avatars', 'avatar.png');
 ```
 
 > 🔒 **Automatic Bearer Token**: When a user signs in, the SDK automatically attaches the `Authorization: Bearer <token>` header to all HTTP requests!
@@ -153,17 +153,31 @@ const allPosts = await padi.table('posts').getFullList({
 // 3. Fetch single record by ID
 const post = await padi.table('posts').getOne('rec_123');
 
-// 4. Create record (JSON or direct FormData upload)
-const newPost = await padi.table('posts').create({ title: 'New Article' });
-
-const formData = new FormData();
-formData.append('title', 'Article with Cover');
-formData.append('cover', fileInput.files[0]);
-const recordWithFile = await padi.table('posts').create(formData);
+// 4. Create record (JSON)
+const newPost = await padi.table('posts').create({
+  title: 'New Article',
+  cover_url: 'http://127.0.0.1:8085/api/storage/banners/cover.png'
+});
 
 // 5. Update & Delete record
 await padi.table('posts').update('rec_123', { title: 'Updated Title' });
 await padi.table('posts').delete('rec_123');
+
+// 6. First record matching filter (getFirst / getFirstListItem)
+const post = await padi.table('posts').getFirstListItem('slug = "intro-to-rust"');
+
+// 7. Fast Total Count (getCount)
+const publishedCount = await padi.table('posts').getCount({ filter: 'status = "published"' });
+
+// 8. High-Performance Batch Create (createBatch)
+const createdPosts = await padi.table('posts').createBatch([
+  { title: 'Post 1', status: 'draft' },
+  { title: 'Post 2', status: 'draft' }
+]);
+
+// 9. Batch Delete by IDs (deleteBatch)
+const deleteResult = await padi.table('posts').deleteBatch(['rec_1', 'rec_2']);
+console.log(`Deleted ${deleteResult.deleted} records`);
 ```
 
 ---
@@ -188,13 +202,27 @@ const newUser = await padi.table('users').register({
   name: 'John Doe'
 });
 
-// 3. Profile Management
+// 3. Profile Management & Update
 const profile = await padi.table('users').getProfile();
+await padi.table('users').updateProfile({ name: 'John Updated' });
 
-// 4. Sign Out
-await padi.table('users').logout();
+// 4. Session Refresh & Token Rotation
+await padi.table('users').authRefresh();
 
-// 5. Reactive Auth Listener
+// 5. Password Management & Verification
+await padi.table('users').changePassword('oldPass123', 'newPass456!');
+await padi.table('users').requestPasswordReset('john@example.com');
+await padi.table('users').confirmPasswordReset(resetToken, 'brandNewPassword!');
+await padi.table('users').requestVerification('john@example.com');
+await padi.table('users').confirmVerification(verifyToken);
+
+// 6. Direct Auth Shortcut (padi.auth.*)
+// Operates directly on the default 'users' collection:
+await padi.auth.login('john@example.com', 'secret_password_123');
+const me = await padi.auth.getProfile();
+await padi.auth.logout();
+
+// 7. Reactive Auth Listener
 padi.authStore.onChange((token, record) => {
   if (token) {
     console.log('User logged in:', record.email);
@@ -202,6 +230,83 @@ padi.authStore.onChange((token, record) => {
     console.log('User logged out');
   }
 });
+```
+
+---
+
+## ⚡ Atomic Transactions & Database Batch Operations
+
+Execute multiple `create`, `update`, `delete`, or raw `sql` operations atomically inside a single ACID database transaction. If any operation fails or violates access rules, the entire transaction automatically rolls back.
+
+```javascript
+import { padi } from '@/lib/padi';
+
+const result = await padi.transaction([
+  {
+    action: 'create',
+    collection: 'orders',
+    data: { user_id: 'usr_1', total: 250000, status: 'pending' }
+  },
+  {
+    action: 'update',
+    collection: 'inventory',
+    id: 'item_10',
+    data: { stock: 49 }
+  }
+]);
+
+console.log('Committed:', result.committed); // true
+console.log('Results:', result.results);
+```
+
+---
+
+## 🛠️ Custom SQL & Dynamic Endpoints
+
+### 1. Parameterized Raw SQL (Admin Only)
+Run direct SQL statements with safe parameter bindings (preventing SQL injection):
+
+```javascript
+import { padi } from '@/lib/padi';
+
+const res = await padi.sql('SELECT COUNT(*) as total, status FROM orders WHERE user_id = ? GROUP BY status', ['usr_1']);
+console.log('Stats:', res.items);
+```
+
+### 2. Dynamic Custom SQL Endpoints
+Call custom endpoints created in your PadiBase Admin Dashboard (`/api/custom/{*path}`):
+
+```javascript
+import { padi } from '@/lib/padi';
+
+const monthlyReport = await padi.custom('reports/monthly', {
+  method: 'GET',
+  query: { year: 2026, month: 11 }
+});
+```
+
+---
+
+## 👑 Admin & Collection Schema Management
+
+```javascript
+import { padi } from '@/lib/padi';
+
+// 1. Admin Authentication
+await padi.admins.authWithPassword('admin@domain.com', 'admin_secret');
+const hasAdmins = await padi.admins.hasAdmins();
+
+// 2. Collection Schema Management
+const collections = await padi.collections.getList();
+const newCollection = await padi.collections.create({
+  name: 'products',
+  type: 'base',
+  schema: [
+    { name: 'title', type: 'text', required: true },
+    { name: 'price', type: 'number', required: true }
+  ]
+});
+
 ```
 
 ---
@@ -239,17 +344,29 @@ padi.realtime.unsubscribe();
 
 ---
 
-## 📁 File Storage & Attachments
+## 📁 File Storage & Media Links
+
+Files are uploaded directly to **Storage Buckets** (`/api/storage/{bucket}`). Once uploaded, save the returned `url` (or `path`) into any standard `Text` or `JSON` column in your database table!
 
 ```javascript
 import { padi } from '@/lib/padi';
 
-// 1. Build File URL:
-const avatarUrl = padi.files.getUrl('users', 'usr_1', 'avatar.png');
-const thumbUrl = padi.files.getUrl('users', 'usr_1', 'avatar.png', { thumb: '100x100' });
+// 1. Upload file to a Storage bucket (e.g. 'avatars', 'banners', 'documents')
+const uploaded = await padi.storage.upload('avatars', fileInputElement.files[0]);
+console.log('Public File URL:', uploaded.url);   // "http://127.0.0.1:8085/api/storage/avatars/171000_photo.png"
+console.log('Relative Path:', uploaded.path);    // "/api/storage/avatars/171000_photo.png"
 
-// 2. Upload standalone file attachment:
-await padi.files.upload('posts', 'rec_123', fileInputElement.files[0], 'cover');
+// 2. Save the file link in your table record (Text / VARCHAR column)
+await padi.table('users').update(currentUser.id, {
+  avatar: uploaded.url
+});
+
+// 3. Build Storage File URL manually:
+const fileUrl = padi.storage.getUrl('avatars', uploaded.filename);
+const downloadUrl = padi.storage.getUrl('avatars', uploaded.filename, { download: 1 });
+
+// 4. Delete a file from a Storage bucket:
+await padi.storage.delete('avatars', uploaded.filename);
 ```
 
 ---
